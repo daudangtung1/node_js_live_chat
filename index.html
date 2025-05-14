@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Laravel & Node.js Chat</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .chat-container {
+            height: 70vh;
+            overflow-y: auto;
+        }
+
+        .message {
+            margin-bottom: 10px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+
+        .my-message {
+            background-color: #d1e7ff;
+            text-align: right;
+        }
+
+        .other-message {
+            background-color: #f1f1f1;
+        }
+
+        .typing-indicator {
+            font-style: italic;
+            color: #666;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container mt-5">
+        <div class="row">
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Đăng nhập</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="loginForm">
+                            <div class="mb-3">
+                                <label for="email" class="form-label">Email</label>
+                                <input type="email" class="form-control" id="email" required>
+                            </div>
+                            <div class="mb-3">
+                                <label for="password" class="form-label">Mật khẩu</label>
+                                <input type="password" class="form-control" id="password" required>
+                            </div>
+                            <button type="submit" class="btn btn-primary">Đăng nhập</button>
+                        </form>
+
+                        <div class="mt-3">
+                            <p>Chưa có tài khoản? <a href="#" id="showRegister">Đăng ký</a></p>
+                        </div>
+
+                        <div class="mt-3 d-none" id="registerForm">
+                            <h5>Đăng ký</h5>
+                            <form id="registerFormEl">
+                                <div class="mb-3">
+                                    <label for="regName" class="form-label">Tên</label>
+                                    <input type="text" class="form-control" id="regName" required>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="regEmail" class="form-label">Email</label>
+                                    <input type="email" class="form-control" id="regEmail" required>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="regPassword" class="form-label">Mật khẩu</label>
+                                    <input type="password" class="form-control" id="regPassword" required>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="regPasswordConfirm" class="form-label">Xác nhận mật khẩu</label>
+                                    <input type="password" class="form-control" id="regPasswordConfirm" required>
+                                </div>
+                                <button type="submit" class="btn btn-success">Đăng ký</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card mt-3 d-none" id="userInfo">
+                    <div class="card-header">
+                        <h5>Thông tin người dùng</h5>
+                    </div>
+                    <div class="card-body">
+                        <p>Tên: <span id="userName"></span></p>
+                        <p>Email: <span id="userEmail"></span></p>
+                        <button id="logoutBtn" class="btn btn-danger">Đăng xuất</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5>Chat Room: <span id="currentRoom">general</span></h5>
+                        <div>
+                            <select class="form-select" id="roomSelect">
+                                <option value="general">General</option>
+                                <option value="tech">Tech</option>
+                                <option value="random">Random</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="chat-container" id="chatMessages">
+                            <div class="text-center text-muted">
+                                <p>Vui lòng đăng nhập để bắt đầu chat</p>
+                            </div>
+                        </div>
+
+                        <div class="typing-indicator mt-2" id="typingIndicator"></div>
+
+                        <form id="messageForm" class="mt-3">
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="messageInput" placeholder="Nhập tin nhắn..."
+                                    disabled>
+                                <button class="btn btn-primary" type="submit" disabled id="sendBtn">Gửi</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script>
+        // Config
+        const API_URL = 'http://localhost:8000/api';
+        const SOCKET_URL = 'http://localhost:3000';
+
+        // DOM Elements
+        const loginForm = document.getElementById('loginForm');
+        const showRegisterBtn = document.getElementById('showRegister');
+        const registerFormDiv = document.getElementById('registerForm');
+        const registerFormEl = document.getElementById('registerFormEl');
+        const userInfoDiv = document.getElementById('userInfo');
+        const userNameSpan = document.getElementById('userName');
+        const userEmailSpan = document.getElementById('userEmail');
+        const logoutBtn = document.getElementById('logoutBtn');
+        const messageForm = document.getElementById('messageForm');
+        const messageInput = document.getElementById('messageInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const chatMessages = document.getElementById('chatMessages');
+        const typingIndicator = document.getElementById('typingIndicator');
+        const roomSelect = document.getElementById('roomSelect');
+        const currentRoomSpan = document.getElementById('currentRoom');
+
+        // State
+        let currentUser = null;
+        let socket = null;
+        let typingTimeout = null;
+        let currentRoom = 'general';
+
+        // Check if user is already logged in
+        const token = localStorage.getItem('token');
+        if (token) {
+            fetchUserData(token);
+        }
+
+        // Show register form
+        showRegisterBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            registerFormDiv.classList.toggle('d-none');
+        });
+
+        // Handle login
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+
+            try {
+                const response = await fetch(`${API_URL}/login`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    localStorage.setItem('token', data.access_token);
+                    currentUser = data.user;
+                    showUserInfo();
+                    connectSocket(data.access_token);
+                    fetchMessages();
+                } else {
+                    alert(data.message || 'Đăng nhập thất bại');
+                }
+            } catch (error) {
+                console.error('Login error:', error);
+                alert('Lỗi khi đăng nhập');
+            }
+        });
+
+        // Handle register
+        registerFormEl.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const name = document.getElementById('regName').value;
+            const email = document.getElementById('regEmail').value;
+            const password = document.getElementById('regPassword').value;
+            const password_confirmation = document.getElementById('regPasswordConfirm').value;
+
+            if (password !== password_confirmation) {
+                alert('Mật khẩu xác nhận không khớp');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_URL}/register`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    body: JSON.stringify({ name, email, password, password_confirmation })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    alert('Đăng ký thành công! Vui lòng đăng nhập.');
+                    registerFormDiv.classList.add('d-none');
+                    document.getElementById('email').value = email;
+                } else {
+                    alert(data.message || 'Đăng ký thất bại');
+                }
+            } catch (error) {
+                console.error('Register error:', error);
+                alert('Lỗi khi đăng ký');
+            }
+        });
+
+        // Handle logout
+        logoutBtn.addEventListener('click', async () => {
+            try {
+                if (socket) {
+                    socket.disconnect();
+                }
+
+                await fetch(`${API_URL}/logout`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`,
+                        'Accept': 'application/json'
+                    }
+                });
+
+                localStorage.removeItem('token');
+                currentUser = null;
+                hideUserInfo();
+                chatMessages.innerHTML = '<div class="text-center text-muted"><p>Vui lòng đăng nhập để bắt đầu chat</p></div>';
+            } catch (error) {
+                console.error('Logout error:', error);
+            }
+        });
+
+        // Handle room change
+        roomSelect.addEventListener('change', () => {
+            currentRoom = roomSelect.value;
+            currentRoomSpan.textContent = currentRoom;
+
+            if (socket) {
+                socket.emit('join-room', currentRoom);
+                chatMessages.innerHTML = '';
+                fetchMessages();
+            }
+        });
+
+        // Handle message form
+        messageForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+
+            const message = messageInput.value.trim();
+            if (!message) return;
+
+            if (socket) {
+                socket.emit('send-message', { message });
+                messageInput.value = '';
+            }
+        });
+
+        // Handle typing indicator
+        messageInput.addEventListener('input', () => {
+            if (!socket) return;
+
+            socket.emit('typing', true);
+
+            clearTimeout(typingTimeout);
+            typingTimeout = setTimeout(() => {
+                socket.emit('typing', false);
+            }, 1000);
+        });
+
+        // Fetch user data
+        async function fetchUserData(token) {
+            try {
+                const response = await fetch(`${API_URL}/user`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Accept': 'application/json'
+                    }
+                });
+
+                if (response.ok) {
+                    currentUser = await response.json();
+                    showUserInfo();
+                    connectSocket(token);
+                    fetchMessages();
+                } else {
+                    localStorage.removeItem('token');
+                }
+            } catch (error) {
+                console.error('Fetch user error:', error);
+                localStorage.removeItem('token');
+            }
+        }
+
+        // Fetch messages
+        async function fetchMessages() {
+            try {
+                const response = await fetch(`${API_URL}/messages?room_id=${currentRoom}`, {
+                    headers: {
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`,
+                        'Accept': 'application/json'
+                    }
+                });
+
+                if (response.ok) {
+                    const messages = await response.json();
+                    displayMessages(messages);
+                }
+            } catch (error) {
+                console.error('Fetch messages error:', error);
+            }
+        }
+
+        // Connect to socket
+        function connectSocket(token) {
+            socket = io(SOCKET_URL, {
+                auth: { token }
+            });
+
+            socket.on('connect', () => {
+                console.log('Connected to socket server');
+                messageInput.disabled = false;
+                sendBtn.disabled = false;
+                socket.emit('join-room', currentRoom);
+            });
+
+            socket.on('new-message', (message) => {
+                displayMessage(message);
+            });
+
+            socket.on('user-joined', (data) => {
+                const joinMsg = document.createElement('div');
+                joinMsg.className = 'text-center text-muted';
+                joinMsg.innerHTML = `<p>${data.message}</p>`;
+                chatMessages.appendChild(joinMsg);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            });
+
+            socket.on('user-left', (data) => {
+                const leftMsg = document.createElement('div');
+                leftMsg.className = 'text-center text-muted';
+                leftMsg.innerHTML = `<p>${data.message}</p>`;
+                chatMessages.appendChild(leftMsg);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            });
+
+            socket.on('user-typing', (data) => {
+                if (data.isTyping) {
+                    typingIndicator.textContent = `${data.user.name} đang nhập...`;
+                } else {
+                    typingIndicator.textContent = '';
+                }
+            });
+
+            socket.on('error', (error) => {
+                console.error('Socket error:', error);
+                alert(error.message);
+            });
+
+            socket.on('disconnect', () => {
+                console.log('Disconnected from socket server');
+                messageInput.disabled = true;
+                sendBtn.disabled = true;
+            });
+        }
+
+        // Show user info
+        function showUserInfo() {
+            loginForm.classList.add('d-none');
+            registerFormDiv.classList.add('d-none');
+            userInfoDiv.classList.remove('d-none');
+            userNameSpan.textContent = currentUser.name;
+            userEmailSpan.textContent = currentUser.email;
+        }
+
+        // Hide user info
+        function hideUserInfo() {
+            loginForm.classList.remove('d-none');
+            userInfoDiv.classList.add('d-none');
+        }
+
+        // Display messages
+        function displayMessages(messages) {
+            chatMessages.innerHTML = '';
+
+            if (messages.length === 0) {
+                const emptyMsg = document.createElement('div');
+                emptyMsg.className = 'text-center text-muted';
+                emptyMsg.innerHTML = '<p>Không có tin nhắn nào. Hãy gửi tin nhắn đầu tiên!</p>';
+                chatMessages.appendChild(emptyMsg);
+                return;
+            }
+
+            messages.forEach(displayMessage);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        // Display single message
+        function displayMessage(message) {
+            const messageDiv = document.createElement('div');
+            const isMyMessage = message.user_id === currentUser.id;
+
+            messageDiv.className = `message ${isMyMessage ? 'my-message' : 'other-message'}`;
+            messageDiv.innerHTML = `
+                <div><strong>${isMyMessage ? 'Bạn' : message.user.name}</strong></div>
+                <div>${message.message}</div>
+                <div><small>${new Date(message.created_at).toLocaleTimeString()}</small></div>
+            `;
+
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+    </script>
+</body>
+
+</html>
